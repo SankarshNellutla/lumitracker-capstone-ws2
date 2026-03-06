@@ -133,5 +133,8 @@ Desktop.ini
 # Outputs (generated files - we keep the HTML in docs/ for GitHub Pages)
 outputs/
 
+# Large data files (obtain separately - see README)
+data/processed/workstream1_clean_lux.csv
+
 # Data (uncomment if you want to ignore large data files)
 # data/

@@ -72,19 +72,19 @@ This repository does **not** perform:
 
 ## Input Files
 
-Place the following files in the repo before running the project.
+**Important**: Some input files are too large for GitHub and must be obtained separately.
 
-### Governed luminosity input
-- `data/processed/workstream1_clean_lux.csv`
+### Required input files (obtain from WS1 or project data source):
+- `data/processed/workstream1_clean_lux.csv` *(~360MB - not included in repo)*
 
-### GIS asset inputs
+### GIS asset inputs (included in repo):
 - `data/raw/gis/City of Sugar Land Streetlight locations.xlsx`
 - `data/raw/gis/City of Sugar Land Traffic Roadway Lights locations.xlsx`
 
-### Reference-only file
+### Reference-only file (included in repo):
 - `data/raw/gis/Avalon private street lights map.pdf`
 
-**Note:** The Avalon file is treated as a reference-only input because it is a PDF map, not a machine-readable GIS coordinate layer.
+**Note**: The `workstream1_clean_lux.csv` file is generated output from Workstream 1 and is too large for GitHub. Contact your team or project coordinator to obtain this file and place it in `data/processed/` before running the analysis.
 
 ---
 
