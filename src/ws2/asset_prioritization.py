@@ -16,6 +16,12 @@ from sklearn.neighbors import BallTree
 
 EARTH_RADIUS_M = 6371000.0
 FEET_TO_METERS = 0.3048
+WS1_FINAL_CSV_TOTAL_ROWS = 2455221
+WS1_ZERO_READINGS_PCT = 23.12
+WS1_CUTOFF_LUX = 0.5567
+WS1_CAP_LUX = 24.7667
+WS1_BASELINE_NON_ZERO_UNDERPERFORMING_PCT = 20.33
+WS1_FINAL_CSV_LOW_PERFORMANCE_PCT = 38.75
 
 REQUIRED_LUX_COLUMNS = {
     "Latitude",
@@ -280,6 +286,13 @@ def finalize_asset_metrics(
     return asset_level
 
 
+def get_critical_high_assets(asset_level: pd.DataFrame) -> pd.DataFrame:
+    return asset_level[
+        (asset_level["asset_flag"]) &
+        (asset_level["severity_tier"].isin(["Critical", "High"]))
+    ].copy()
+
+
 def build_summary_tables(
     asset_level: pd.DataFrame,
     total_rows: int,
@@ -292,6 +305,25 @@ def build_summary_tables(
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     unmatched_rows = eligible_rows - matched_rows
     match_rate = matched_rows / eligible_rows if eligible_rows > 0 else np.nan
+    matched_rows_pct_of_total = matched_rows / total_rows if total_rows > 0 else np.nan
+
+    assets_with_matches = int(asset_level["asset_id"].nunique())
+    assets_meeting_min_observations = int((asset_level["observation_count"] >= min_observations).sum())
+    flagged_assets_count = int(asset_level["asset_flag"].sum())
+    flagged_assets_pct = flagged_assets_count / assets_with_matches if assets_with_matches > 0 else np.nan
+
+    critical_count = int((asset_level["severity_tier"] == "Critical").sum())
+    high_count = int((asset_level["severity_tier"] == "High").sum())
+    moderate_count = int((asset_level["severity_tier"] == "Moderate").sum())
+    low_count = int((asset_level["severity_tier"] == "Low").sum())
+    insufficient_count = int((asset_level["severity_tier"] == "Insufficient data").sum())
+
+    critical_high_map_assets_count = int(
+        (
+            asset_level["asset_flag"] &
+            asset_level["severity_tier"].isin(["Critical", "High"])
+        ).sum()
+    )
 
     severity_counts = (
         asset_level["severity_tier"]
@@ -303,26 +335,48 @@ def build_summary_tables(
     )
 
     summary_rows = [
+        {"metric": "ws1_final_csv_total_rows", "value": WS1_FINAL_CSV_TOTAL_ROWS},
+        {"metric": "ws1_final_csv_zero_readings_pct", "value": WS1_ZERO_READINGS_PCT},
+        {"metric": "ws1_cutoff_lux", "value": WS1_CUTOFF_LUX},
+        {"metric": "ws1_cap_lux", "value": WS1_CAP_LUX},
+        {"metric": "ws1_baseline_non_zero_underperforming_pct", "value": WS1_BASELINE_NON_ZERO_UNDERPERFORMING_PCT},
+        {"metric": "ws1_final_csv_low_performance_pct", "value": WS1_FINAL_CSV_LOW_PERFORMANCE_PCT},
         {"metric": "total_input_rows", "value": total_rows},
         {"metric": "eligible_rows_for_join", "value": eligible_rows},
         {"metric": "matched_rows_within_tolerance", "value": matched_rows},
         {"metric": "unmatched_rows_beyond_tolerance", "value": unmatched_rows},
-        {"metric": "match_rate", "value": round(float(match_rate), 6) if pd.notna(match_rate) else np.nan},
-        {"metric": "total_assets_with_matches", "value": int(asset_level["asset_id"].nunique())},
-        {"metric": "flagged_assets_count", "value": int(asset_level["asset_flag"].sum())},
-        {"metric": "critical_assets_count", "value": int((asset_level["severity_tier"] == "Critical").sum())},
-        {"metric": "high_assets_count", "value": int((asset_level["severity_tier"] == "High").sum())},
-        {"metric": "moderate_assets_count", "value": int((asset_level["severity_tier"] == "Moderate").sum())},
-        {"metric": "low_assets_count", "value": int((asset_level["severity_tier"] == "Low").sum())},
-        {"metric": "insufficient_data_assets_count", "value": int((asset_level["severity_tier"] == "Insufficient data").sum())},
-        {"metric": "join_method", "value": "nearest_neighbor_haversine"},
+        {"metric": "match_rate_of_eligible_rows", "value": round(float(match_rate), 6) if pd.notna(match_rate) else np.nan},
+        {"metric": "matched_rows_pct_of_total_input", "value": round(float(matched_rows_pct_of_total) * 100, 4) if pd.notna(matched_rows_pct_of_total) else np.nan},
+        {"metric": "total_assets_with_matches", "value": assets_with_matches},
+        {"metric": "assets_meeting_min_observations", "value": assets_meeting_min_observations},
+        {"metric": "flagged_assets_count", "value": flagged_assets_count},
+        {"metric": "flagged_assets_pct_of_assets_with_matches", "value": round(float(flagged_assets_pct) * 100, 4) if pd.notna(flagged_assets_pct) else np.nan},
+        {"metric": "critical_assets_count", "value": critical_count},
+        {"metric": "high_assets_count", "value": high_count},
+        {"metric": "moderate_assets_count", "value": moderate_count},
+        {"metric": "low_assets_count", "value": low_count},
+        {"metric": "insufficient_data_assets_count", "value": insufficient_count},
+        {"metric": "critical_high_assets_shown_on_map", "value": critical_high_map_assets_count},
+        {"metric": "join_method", "value": "nearest_neighbor_haversine_balltree"},
         {"metric": "distance_tolerance_ft", "value": max_distance_ft},
         {"metric": "min_observations", "value": min_observations},
         {"metric": "asset_flag_threshold", "value": asset_flag_threshold},
+        {
+            "metric": "asset_flag_rule",
+            "value": "asset_flag = observation_count >= min_observations and pct_low_performance >= asset_flag_threshold",
+        },
+        {
+            "metric": "severity_basis",
+            "value": "severity is based on pct_low_performance from the final WS1 CSV, using the provided low_performance flag and the WS1 0.5567 lux cutoff",
+        },
         {"metric": "avalon_used_in_automated_join", "value": "no"},
         {"metric": "avalon_reference_file_provided", "value": "yes" if avalon_pdf else "no"},
-        {"metric": "notes", "value": "Avalon PDF is an approximate exhibit map and was not used in automated spatial join."},
+        {
+            "metric": "notes",
+            "value": "Traffic roadway Service Meter records were excluded before matching. Avalon PDF was not used in automated spatial join.",
+        },
     ]
+
     risk_summary = pd.DataFrame(summary_rows)
     return risk_summary, severity_counts
 
@@ -341,14 +395,20 @@ def build_validation_template(
     low_performance_share = low_performance_count_total / total_rows if total_rows > 0 else np.nan
 
     rows = [
-        {"metric": "total_rows_analyzed", "value": total_rows},
-        {"metric": "zero_readings_count", "value": lux_zero_count},
-        {"metric": "zero_readings_pct", "value": round(float(zero_share) * 100, 4) if pd.notna(zero_share) else np.nan},
-        {"metric": "cap_value_used_lux", "value": round(float(cap_value_used), 6) if pd.notna(cap_value_used) else np.nan},
-        {"metric": "cutoff_value_used_lux", "value": round(float(cutoff_value_used), 6) if pd.notna(cutoff_value_used) else np.nan},
-        {"metric": "low_performance_count", "value": low_performance_count_total},
-        {"metric": "low_performance_share_pct", "value": round(float(low_performance_share) * 100, 4) if pd.notna(low_performance_share) else np.nan},
-        {"metric": "join_method", "value": "nearest_neighbor_haversine"},
+        {"metric": "observed_total_rows_in_input", "value": total_rows},
+        {"metric": "observed_zero_readings_count", "value": lux_zero_count},
+        {"metric": "observed_zero_readings_pct", "value": round(float(zero_share) * 100, 4) if pd.notna(zero_share) else np.nan},
+        {"metric": "observed_cap_value_used_lux", "value": round(float(cap_value_used), 6) if pd.notna(cap_value_used) else np.nan},
+        {"metric": "observed_cutoff_value_used_lux", "value": round(float(cutoff_value_used), 6) if pd.notna(cutoff_value_used) else np.nan},
+        {"metric": "observed_low_performance_count", "value": low_performance_count_total},
+        {"metric": "observed_low_performance_share_pct", "value": round(float(low_performance_share) * 100, 4) if pd.notna(low_performance_share) else np.nan},
+        {"metric": "ws1_final_csv_expected_total_rows", "value": WS1_FINAL_CSV_TOTAL_ROWS},
+        {"metric": "ws1_final_csv_expected_zero_readings_pct", "value": WS1_ZERO_READINGS_PCT},
+        {"metric": "ws1_expected_cap_lux", "value": WS1_CAP_LUX},
+        {"metric": "ws1_expected_cutoff_lux", "value": WS1_CUTOFF_LUX},
+        {"metric": "ws1_baseline_non_zero_underperforming_pct", "value": WS1_BASELINE_NON_ZERO_UNDERPERFORMING_PCT},
+        {"metric": "ws1_final_csv_expected_low_performance_pct", "value": WS1_FINAL_CSV_LOW_PERFORMANCE_PCT},
+        {"metric": "join_method", "value": "nearest_neighbor_haversine_balltree"},
         {"metric": "distance_tolerance_ft", "value": max_distance_ft},
         {"metric": "min_observations", "value": min_observations},
         {"metric": "asset_flag_threshold", "value": asset_flag_threshold},
@@ -406,51 +466,107 @@ def save_ranked_table(asset_level: pd.DataFrame, output_tables_dir: Path) -> Non
 def save_top20_table(asset_level: pd.DataFrame, output_tables_dir: Path) -> None:
     top20 = asset_level[asset_level["asset_flag"]].copy().head(20)
 
-    top20 = top20[
-        [
-            "rank_overall",
-            "asset_id",
-            "asset_source",
-            "severity_tier",
-            "asset_latitude",
-            "asset_longitude",
-            "observation_count",
-            "low_performance_count",
-            "pct_low_performance",
-            "mean_lux_mean",
-            "mean_lux_mean_capped",
-            "mean_matched_distance_ft",
+    base_cols = [
+        "rank_overall",
+        "asset_id",
+        "asset_source",
+        "severity_tier",
+        "asset_latitude",
+        "asset_longitude",
+        "observation_count",
+        "low_performance_count",
+        "pct_low_performance",
+        "mean_lux_mean",
+        "mean_lux_mean_capped",
+        "mean_matched_distance_ft",
+    ]
+
+    optional_cols = [
+        c for c in [
             "FIXTUREWAT",
             "LASTUPDATE",
+            "Pole ID",
+            "Roadway",
+            "Fixture Type",
+            "Power Wattage",
+            "Life Cycle",
+            "SUBTYPE",
         ]
-    ].copy()
+        if c in top20.columns
+    ]
+
+    top20 = top20[base_cols + optional_cols].copy()
 
     top20["pct_low_performance"] = (top20["pct_low_performance"] * 100).round(2)
     top20["mean_lux_mean"] = top20["mean_lux_mean"].round(3)
     top20["mean_lux_mean_capped"] = top20["mean_lux_mean_capped"].round(3)
     top20["mean_matched_distance_ft"] = top20["mean_matched_distance_ft"].round(2)
 
-    top20 = top20.rename(
-        columns={
-            "rank_overall": "rank",
-            "asset_id": "asset_id",
-            "asset_source": "asset_source",
-            "severity_tier": "severity_tier",
-            "asset_latitude": "latitude",
-            "asset_longitude": "longitude",
-            "observation_count": "observation_count",
-            "low_performance_count": "low_performance_count",
-            "pct_low_performance": "pct_low_performance_pct",
-            "mean_lux_mean": "mean_lux",
-            "mean_lux_mean_capped": "mean_lux_capped",
-            "mean_matched_distance_ft": "mean_match_distance_ft",
-            "FIXTUREWAT": "fixture_wattage_type",
-            "LASTUPDATE": "last_update",
-        }
-    )
+    rename_map = {
+        "rank_overall": "rank",
+        "asset_latitude": "latitude",
+        "asset_longitude": "longitude",
+        "pct_low_performance": "pct_ws1_underperforming_pct",
+        "mean_lux_mean": "mean_lux",
+        "mean_lux_mean_capped": "mean_lux_capped",
+        "mean_matched_distance_ft": "mean_match_distance_ft",
+        "FIXTUREWAT": "fixture_wattage_type",
+        "LASTUPDATE": "last_update",
+        "Pole ID": "pole_id",
+        "Roadway": "roadway",
+        "Fixture Type": "fixture_type",
+        "Power Wattage": "power_wattage",
+        "Life Cycle": "life_cycle",
+        "SUBTYPE": "subtype",
+    }
+
+    top20 = top20.rename(columns=rename_map)
 
     top20.to_csv(
         output_tables_dir / "top20_underperforming_assets.csv",
+        index=False,
+    )
+
+
+def save_example_asset_table(asset_level: pd.DataFrame, output_tables_dir: Path) -> None:
+    example_asset = asset_level[asset_level["asset_flag"]].copy().head(1)
+
+    if example_asset.empty:
+        example_asset = asset_level.head(1).copy()
+
+    example_asset = example_asset[
+        [
+            "rank_overall",
+            "asset_id",
+            "asset_source",
+            "severity_tier",
+            "observation_count",
+            "low_performance_count",
+            "pct_low_performance",
+            "mean_lux_mean",
+            "mean_lux_mean_capped",
+            "mean_matched_distance_ft",
+            "asset_flag",
+        ]
+    ].copy()
+
+    example_asset["pct_low_performance"] = (example_asset["pct_low_performance"] * 100).round(2)
+    example_asset["mean_lux_mean"] = example_asset["mean_lux_mean"].round(3)
+    example_asset["mean_lux_mean_capped"] = example_asset["mean_lux_mean_capped"].round(3)
+    example_asset["mean_matched_distance_ft"] = example_asset["mean_matched_distance_ft"].round(2)
+
+    example_asset = example_asset.rename(
+        columns={
+            "rank_overall": "rank",
+            "pct_low_performance": "pct_ws1_underperforming_pct",
+            "mean_lux_mean": "mean_lux",
+            "mean_lux_mean_capped": "mean_lux_capped",
+            "mean_matched_distance_ft": "mean_match_distance_ft",
+        }
+    )
+
+    example_asset.to_csv(
+        output_tables_dir / "example_asset_metrics.csv",
         index=False,
     )
 
@@ -474,25 +590,22 @@ def plot_top20(asset_level: pd.DataFrame, output_figures_dir: Path) -> None:
 
     plt.figure(figsize=(12, 9))
     plt.barh(labels, plot_df["pct_low_performance"] * 100)
-    plt.xlabel("% low_performance readings")
+    plt.xlabel("% WS1 underperforming readings")
     plt.ylabel("Asset")
-    plt.title("Top 20 underperforming assets")
+    plt.title("Top 20 assets by WS1 underperforming share")
     plt.tight_layout()
     plt.savefig(output_figures_dir / "top20_underperforming_assets.png", dpi=200)
     plt.close()
 
 
 def plot_flagged_assets_png(asset_level: pd.DataFrame, output_figures_dir: Path) -> None:
-    flagged = asset_level[asset_level["asset_flag"]].copy()
+    flagged = get_critical_high_assets(asset_level)
     if flagged.empty:
         return
 
     color_map = {
         "Critical": "red",
         "High": "orange",
-        "Moderate": "gold",
-        "Low": "blue",
-        "Insufficient data": "gray",
     }
 
     plt.figure(figsize=(10, 8))
@@ -508,7 +621,7 @@ def plot_flagged_assets_png(asset_level: pd.DataFrame, output_figures_dir: Path)
 
     plt.xlabel("Longitude")
     plt.ylabel("Latitude")
-    plt.title("Flagged assets by severity tier")
+    plt.title("Critical and High flagged assets")
     plt.legend()
     plt.tight_layout()
     plt.savefig(output_figures_dir / "flagged_assets_map.png", dpi=220)
@@ -516,7 +629,7 @@ def plot_flagged_assets_png(asset_level: pd.DataFrame, output_figures_dir: Path)
 
 
 def build_flagged_assets_html_map(asset_level: pd.DataFrame, output_figures_dir: Path) -> None:
-    flagged = asset_level[asset_level["asset_flag"]].copy()
+    flagged = get_critical_high_assets(asset_level)
     if flagged.empty:
         return
 
@@ -527,9 +640,6 @@ def build_flagged_assets_html_map(asset_level: pd.DataFrame, output_figures_dir:
     color_map = {
         "Critical": "red",
         "High": "orange",
-        "Moderate": "gold",
-        "Low": "blue",
-        "Insufficient data": "gray",
     }
 
     for row in flagged.itertuples(index=False):
@@ -538,8 +648,8 @@ def build_flagged_assets_html_map(asset_level: pd.DataFrame, output_figures_dir:
             f"Source: {row.asset_source}<br>"
             f"Severity: {row.severity_tier}<br>"
             f"Observation count: {row.observation_count}<br>"
-            f"Low-performance count: {row.low_performance_count}<br>"
-            f"% low-performance: {row.pct_low_performance:.2%}<br>"
+            f"WS1 underperforming count: {row.low_performance_count}<br>"
+            f"% WS1 underperforming: {row.pct_low_performance:.2%}<br>"
             f"Mean lux capped: {row.mean_lux_mean_capped:.3f}<br>"
             f"Mean match distance ft: {row.mean_matched_distance_ft:.2f}"
         )
@@ -642,6 +752,7 @@ def main() -> None:
 
     save_ranked_table(asset_level, output_tables_dir)
     save_top20_table(asset_level, output_tables_dir)
+    save_example_asset_table(asset_level, output_tables_dir)
     risk_summary.to_csv(output_tables_dir / "asset_risk_summary.csv", index=False)
     severity_counts.to_csv(output_tables_dir / "severity_tier_summary.csv", index=False)
     validation_template.to_csv(output_tables_dir / "ws2_validation_template.csv", index=False)
